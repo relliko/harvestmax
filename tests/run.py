@@ -2,8 +2,9 @@
 
     python tests/run.py
 
-The server side is Phoenix's own scripts/globals/harvest_festivals.lua (C:/code/Phoenix), loaded
-against a stub player, so the addon's rules are checked against the code the server runs.
+Phoenix's live festival code isn't public, so the server here is a model of the rules on
+wiki.phoenix-xi.com/Harvest_Festival (generated from Phoenix game beta 136ed7307def): a 5% prize
+roll per trade (a worn piece's upgrade instead), costumes once per sweet kind per Vana'diel day.
 """
 import os
 import unittest
@@ -12,136 +13,106 @@ from lupa import luajit21
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ADDON = os.path.dirname(HERE)
-PHOENIX = os.environ.get('PHOENIX', r'C:/code/Phoenix')
-FESTIVAL = os.path.join(PHOENIX, 'scripts', 'globals', 'harvest_festivals.lua').replace('\\', '/')
 
 SERVER = r"""
-xi = { settings = { main = { HALLOWEEN_2005 = 1, HALLOWEEN_YEAR_ROUND = 0 } },
-       slot = { HEAD = 4, MAIN = 0 }, effect = { COSTUME = 127 }, zoneMisc = { COSTUME = 1 },
-       item = { HORROR_HEAD = 13917, HORROR_HEAD_II = 15177, TREAT_STAFF = 17566, TREAT_STAFF_II = 17588 } }
-function JstMonth() return 10 end
-function JstDayOfTheMonth() return 25 end
-zones = { [230] = { text = { HERE_TAKE_THIS = 1, ITEM_OBTAINED = 2, IF_YOU_WEAR_THIS = 3, THANK_YOU_TREAT = 4, THANK_YOU = 5 } } }
-utils = { mask = {
-    getBit = function (m, b) return bit.band(m, bit.lshift(1, b)) ~= 0 end,
-    setBit = function (m, b, v) return v and bit.bor(m, bit.lshift(1, b)) or bit.band(m, bit.bnot(bit.lshift(1, b))) end,
-} }
-math.randomInt = function (a, b) return math.random(a, b) end
-dofile(FESTIVAL)
+PLAIN = { 13916, 15176, 17565, 17587 }
+UP = { [13916] = 13917, [15176] = 15177, [17565] = 17566, [17587] = 17588 }
 
--- A stub player: owned items, worn head/main, free slots; trade() runs one trade of `item`.
 function make_player(owned, head, main, free)
-    local p = { owned = owned, head = head, main = main, free = free, vars = { }, got = nil, used = false }
-    function p:getZoneName() return 'Southern_San_dOria' end
-    function p:getZoneID() return 230 end
-    function p:getEquipID(slot) return slot == 4 and self.head or self.main end
-    function p:hasItem(id) return self.owned[id] == true end
-    function p:getFreeSlotsCount() return self.free end
-    function p:messageSpecial() end
-    function p:addItem(id) self.owned[id] = true; self.got = id end
-    function p:getCharVar(n) return self.vars[n] or 0 end
-    function p:setCharVar(n, v) self.vars[n] = v end
-    function p:canUseMisc() return true end
-    function p:addStatusEffect() end
-    function p:tradeComplete() self.used = true end
-    return p
+    return { owned = owned, head = head, main = main, free = free, costumed = { }, reply = nil }
 end
-function trade(p, item)
-    p.got = nil
-    xi.events.harvestFestival.onHalloweenTrade(p, { getItemId = function () return item end }, { })
-    return p.got
+
+-- One trade of `n` of a sweet, as the wiki tells it. Returns the prize id or nil.
+function trade(p, sweet, n)
+    local prize
+    for _, id in ipairs({ p.head, p.main }) do
+        if prize == nil and UP[id] and not p.owned[UP[id]] then prize = UP[id] end
+    end
+    if prize == nil then
+        local missing = { }
+        for _, id in ipairs(PLAIN) do if not p.owned[id] then missing[#missing + 1] = id end end
+        if #missing > 0 then prize = missing[math.random(#missing)] end
+    end
+    if prize ~= nil and p.free > 0 and math.random() < 0.05 then
+        p.owned[prize] = true
+        p.reply = 'Here, take this...'
+        return prize
+    end
+    if not p.costumed[sweet] then
+        p.costumed[sweet] = true
+        p.reply = 'Thank you... And now for your treat...'
+    else
+        p.reply = 'Thank you...'
+    end
 end
 """
 
-GINGER = 4394
-ALL = [13916, 13917, 15176, 15177, 17565, 17566, 17587, 17588]
-HEADS = [0, 13916, 15176, 13917, 15177]
-MAINS = [0, 17565, 17587, 17566, 17588]
+GARLIC, GINGER = 4467, 4394
 
 
 def lua_env():
     lua = luajit21.LuaRuntime()
     lua.execute(f"package.path = [[{ADDON}]] .. '/?.lua;' .. package.path")
-    lua.globals().FESTIVAL = FESTIVAL
     lua.execute(SERVER)
     lua.execute("core = require('core')")
     return lua
 
 
 class Rules(unittest.TestCase):
-    """core.target against the server's choice for every owned set and outfit."""
 
     @classmethod
     def setUpClass(cls):
         cls.lua = lua_env()
-        cls.lua.execute(r"""
-        -- Forces the 1-in-3 roll to hit, so the server shows which item it aimed for.
-        function aim(owned, head, main)
-            local real = math.randomInt
-            math.randomInt = function (a, b) if a == 1 and b == 3 then return 1 end return real(a, b) end
-            local p = make_player(owned, head, main, 10)
-            local got = trade(p, 4394)
-            math.randomInt = real
-            return got or 0
-        end
-        """)
+        cls.g = cls.lua.globals()
 
-    def owned(self, mask):
-        return self.lua.table_from({ALL[i]: True for i in range(8) if mask >> i & 1})
+    def t(self, d):
+        return self.lua.table_from(d)
 
-    def test_every_state(self):
-        g = self.lua.globals()
-        checked = 0
-        for mask in range(256):
-            for head in HEADS:
-                for main in MAINS:
-                    owned = self.owned(mask)
-                    want, chance = g.core.target(owned, head, main)
-                    if want == 'plain':
-                        # Random among the missing plain pieces: every result must be one of them.
-                        for _ in range(8):
-                            got = g.aim(self.owned(mask), head, main)
-                            self.assertTrue(got == 0 or (got in (13916, 15176, 17565, 17587) and not owned[got]))
-                    else:
-                        got = g.aim(self.owned(mask), head, main)
-                        self.assertEqual(got, want, f'mask={mask:08b} head={head} main={main}')
-                        self.assertEqual(chance > 0, want != 0)
-                    checked += 1
-        self.assertEqual(checked, 256 * 25)
+    def test_targets(self):
+        core = self.g.core
+        none = self.t({})
+        self.assertEqual(tuple(core.target(none, 0, 0)), ('plain', 0.05))
+        # A worn piece aims for its upgrade, head first.
+        self.assertEqual(core.target(self.t({13916: True}), 13916, 17565)[0], 13917)
+        self.assertEqual(core.target(self.t({13916: True, 13917: True}), 13916, 17565)[0], 17566)
+        everything = self.t({i: True for i in (13916, 15176, 17565, 17587)})
+        self.assertEqual(core.target(everything, 0, 0)[0], 0)
 
-    def test_plain_chance(self):
-        # Measured against the server with its real randomness.
-        g = self.lua.globals()
-        for owned_plain in range(4):
-            mask = sum(1 << [0, 2, 4, 6][i] for i in range(owned_plain))
-            self.lua.execute('math.randomseed(7)')
-            n = 30000
-            hits = self.lua.execute(f"""
-                local n, hits = {n}, 0
-                for _ = 1, n do
-                    local owned = {{ }}
-                    for i, id in ipairs({{13916, 15176, 17565, 17587}}) do if i <= {owned_plain} then owned[id] = true end end
-                    if trade(make_player(owned, 0, 0, 10), 4394) then hits = hits + 1 end
-                end
-                return hits
-            """)
-            expect = g.core.plain_chance(4 - owned_plain)
-            self.assertAlmostEqual(hits / n, expect, delta=0.012, msg=f'{owned_plain} owned')
+    def test_trades_left(self):
+        mean, enough = self.g.core.trades_left(self.t({}))
+        self.assertAlmostEqual(mean, 160)
+        self.assertTrue(220 < enough < 250, enough)
+        mean, _ = self.g.core.trades_left(self.t({i: True for i in (13916, 13917, 15176, 15177, 17565, 17566, 17587)}))
+        self.assertAlmostEqual(mean, 20)
 
-    def test_full_bag_and_stack(self):
-        g = self.lua.globals()
-        self.lua.execute(r"""
-            real = math.randomInt
-            math.randomInt = function (a, b) if a == 1 and b == 3 then return 1 end return real(a, b) end
-        """)
-        p = g.make_player(self.lua.table(), 0, 0, 0)
-        self.assertIsNone(g.trade(p, GINGER))
-        self.assertTrue(p.used, 'the treat goes even with a full bag')
-        self.lua.execute('math.randomInt = real')
+    def test_vana_day(self):
+        core = self.g.core
+        epoch = 1009810800
+        self.assertEqual(core.vana_day(epoch), 0)
+        self.assertEqual(core.vana_day(epoch + 3455), 0)
+        self.assertEqual(core.vana_day(epoch + 3456), 1)
+        self.assertEqual(core.to_midnight(epoch + 3456 * 10 + 100), 3356)
+
+    def test_replies(self):
+        core = self.g.core
+        self.assertEqual(core.classify('Here, take this...'), 'item')
+        self.assertEqual(core.classify('Thank you... And now for your treat...'), 'costume')
+        self.assertEqual(core.classify('If you put this on and walk around, something...unexpected might happen...'), 'costume')
+        self.assertEqual(core.classify('Thank you...'), 'nothing')
+        self.assertIsNone(core.classify('Thank you for shopping!'))
+        self.assertIn('already gave a costume today', core.explain('nothing', None))
+        gear = self.t({'kind': 'gear', 'text': 'Take off Pumpkin Head.'})
+        self.assertIn('gear was wrong (take off pumpkin head)', core.explain('nothing', gear).replace(' for this trade', ''))
+
+    def test_cheapest_treat(self):
+        core = self.g.core
+        self.assertEqual(core.best_treat(self.t({5631: 1, GINGER: 4, GARLIC: 2})), GARLIC)
+        self.assertEqual(core.best_treat(self.t({4320: 1, 4510: 4})), 4510)
+        self.assertIsNone(core.best_treat(self.t({5631: 3})))  # Pumpkin Cake isn't on Phoenix's list
 
 
 class Plan(unittest.TestCase):
-    """Following next_step from nothing to all eight, with the server deciding each trade."""
+    """Following next_step from nothing to all eight, with the model server deciding each trade."""
 
     @classmethod
     def setUpClass(cls):
@@ -151,9 +122,9 @@ class Plan(unittest.TestCase):
             math.randomseed(seed)
             local p = make_player({ }, 0, 0, 30)
             local trades, swaps = 0, 0
-            for _ = 1, 2000 do
+            for _ = 1, 5000 do
                 local s = { owned = p.owned, bag = p.owned, head = p.head, main = p.main, free = p.free,
-                            treats = { [4394] = 99 }, npc = { name = 'Pourette', dist = 3 } }
+                            treats = { [4467] = 99, [4394] = 5 }, npc = { name = 'Pourette', dist = 3 } }
                 local step = core.next_step(s)
                 if step.kind == 'done' then return trades, swaps end
                 if step.kind == 'gear' then
@@ -161,8 +132,8 @@ class Plan(unittest.TestCase):
                     if step.gear.head ~= nil then p.head = step.gear.head or 0 end
                     if step.gear.main ~= nil then p.main = step.gear.main or 0 end
                 elseif step.kind == 'trade' then
-                    assert(step.treat == 4394)
-                    trade(p, step.treat)
+                    assert(step.treat == 4467)
+                    trade(p, step.treat, 1)
                     trades = trades + 1
                 else
                     error('unexpected step ' .. step.kind)
@@ -175,21 +146,20 @@ class Plan(unittest.TestCase):
     def test_finishes_in_expected_trades(self):
         g = self.lua.globals()
         mean, enough = g.core.trades_left(self.lua.table())
-        runs = [g.run(seed) for seed in range(1, 3001)]
+        runs = [g.run(seed) for seed in range(1, 2001)]
         trades = [r[0] for r in runs]
         avg = sum(trades) / len(trades)
-        self.assertAlmostEqual(avg, mean, delta=0.6)
+        self.assertAlmostEqual(avg, mean, delta=4)
         covered = sum(1 for t in trades if t <= enough) / len(trades)
         self.assertGreater(covered, 0.88)
         self.assertLess(max(r[1] for r in runs), 5, 'a handful of gear swaps at most')
-        print(f'\n  expected {mean:.1f} trades, 90% within {enough}; simulated mean {avg:.1f}, max {max(trades)}')
+        print(f'\n  expected {mean:.0f} trades, 90% within {enough}; simulated mean {avg:.1f}, max {max(trades)}')
 
     def test_wrong_gear_is_fixed_first(self):
         g = self.lua.globals()
-        # Wearing Pumpkin Head with Horror Head owned and plain pieces missing: take it off.
         s = self.lua.table_from({
             'owned': self.lua.table_from({13916: True, 13917: True}), 'bag': self.lua.table_from({13916: True}),
-            'head': 13916, 'main': 0, 'free': 5, 'treats': self.lua.table_from({GINGER: 3}),
+            'head': 13916, 'main': 0, 'free': 5, 'treats': self.lua.table_from({GARLIC: 3}),
         })
         step = g.core.next_step(s)
         self.assertEqual(step.kind, 'gear')
@@ -199,13 +169,8 @@ class Plan(unittest.TestCase):
         g = self.lua.globals()
         owned = self.lua.table_from({i: True for i in (13916, 15176, 17565, 17587)})
         s = self.lua.table_from({'owned': owned, 'bag': self.lua.table(), 'head': 0, 'main': 0,
-                                 'free': 5, 'treats': self.lua.table_from({GINGER: 3})})
+                                 'free': 5, 'treats': self.lua.table_from({GARLIC: 3})})
         self.assertEqual(g.core.next_step(s).kind, 'fetch')
-
-    def test_cheapest_treat(self):
-        g = self.lua.globals()
-        self.assertEqual(g.core.best_treat(self.lua.table_from({5631: 1, 4510: 4, 4394: 2})), GINGER)
-        self.assertEqual(g.core.best_treat(self.lua.table_from({5631: 1, 4510: 4})), 4510)
 
 
 STUBS = r"""
@@ -222,13 +187,14 @@ package.loaded['settings'] = { load = function (d) return d end, register = func
 drawn = {}
 local ui = {}
 setmetatable(ui, { __index = function () return function () return true end end })
+ui.GetCursorPosX = function () return 0 end
 ui.TextColored = function (_, t) drawn[#drawn + 1] = t end
 ui.Button = function (t) drawn[#drawn + 1] = '[' .. t .. ']' return false end
 package.loaded['imgui'] = ui
 ImGuiCond_FirstUseEver, ImGuiWindowFlags_AlwaysAutoResize = 0, 0
 print = function (x) printed[#printed + 1] = x end
 
-bags = { [0] = { [1] = { Id = 4394, Count = 12 }, [2] = { Id = 13916, Count = 1 } } }
+bags = { [0] = { [1] = { Id = 4467, Count = 12 }, [2] = { Id = 13916, Count = 1 } } }
 sizes = { [0] = 31 }
 worn_head = 2 -- slot index of the head piece in the inventory
 AshitaCore = {
@@ -255,7 +221,7 @@ AshitaCore = {
 
 
 class Addon(unittest.TestCase):
-    """harvestmax.lua against stubbed Ashita: reads the client, swaps gear, draws."""
+    """harvestmax.lua against stubbed Ashita: reads the client, swaps gear, explains replies, draws."""
 
     def setUp(self):
         self.lua = luajit21.LuaRuntime()
@@ -271,36 +237,72 @@ class Addon(unittest.TestCase):
         self.g.events['d3d_present']()
         return list(self.g.drawn.values())
 
+    def say(self, text):
+        e = self.lua.table_from({'message': text, 'injected': False, 'blocked': False})
+        self.g.events['text_in'](e)
+
+    def has(self, drawn, text):
+        # line() doubles % for ImGui's format string.
+        self.assertTrue(any(text in t.replace('%%', '%') for t in drawn), drawn)
+
     def test_takes_off_pumpkin_head_while_farming(self):
         drawn = self.frame()
         self.assertIn('/equip head', list(self.g.queued.values()))
-        self.assertTrue(any('Take off Pumpkin Head' in t for t in drawn), drawn)
+        self.has(drawn, 'Take off Pumpkin Head')
 
-    def test_trade_step_and_counting(self):
+    def test_trade_step_counting_and_replies(self):
         self.lua.execute("worn_head = 0")
         drawn = self.frame()
-        self.assertTrue(any('Trade ONE Ginger Cookie to Pourette (4 yalms)' in t for t in drawn), drawn)
-        self.assertTrue(any('1 of 8' in t for t in drawn), drawn)
+        self.has(drawn, 'Trade ONE Garlic Cracker to Pourette (4 yalms)')
+        self.has(drawn, '1 of 8')
+        self.has(drawn, 'Pourette gives the Orc costume')
+        self.has(drawn, 'still give a costume today: Garlic Cracker')
         # The whole stack goes in one trade.
         self.lua.execute("bags[0][1] = nil")
         self.frame()
-        self.assertTrue(any('12 treats for one try' in str(p) for p in self.g.printed.values()))
-        self.lua.execute("bags[0][1] = { Id = 4394, Count = 5 }")
-        self.frame()
-        self.lua.execute("bags[0][1] = { Id = 4394, Count = 4 }; bags[0][3] = { Id = 15176, Count = 1 }")
+        self.assertTrue(any('12 sweets for one try' in str(p) for p in self.g.printed.values()))
+        self.say('Thank you... And now for your treat...')
+        self.lua.execute("bags[0][1] = { Id = 4467, Count = 5 }")
         drawn = self.frame()
+        self.has(drawn, 'Last trade: Costume')
+        self.has(drawn, 'still give a costume today: none on you')
+        self.lua.execute("local t = os.clock() while os.clock() - t < 1.6 do end")
+        self.lua.execute("bags[0][1] = { Id = 4467, Count = 4 }")
+        self.frame()
+        self.say('Thank you...')
+        drawn = self.frame()
+        self.has(drawn, 'already gave a costume today')
+        self.lua.execute("local t = os.clock() while os.clock() - t < 1.6 do end")
+        self.lua.execute("bags[0][1] = { Id = 4467, Count = 3 }; bags[0][3] = { Id = 15176, Count = 1 }")
+        self.frame()
+        self.say('Here, take this...')
+        drawn = self.frame()
+        self.has(drawn, '5% prize roll hit')
         self.assertTrue(any('Got Pumpkin Head II' in str(p) for p in self.g.printed.values()))
-        self.assertTrue(any('2 trades, 1 pieces, 11 treats wasted' in t for t in drawn), drawn)
+        self.has(drawn, '3 trades, 1 prizes, 11 sweets wasted')
 
-    def test_buy_mentions_valeriano(self):
+    def test_costumes_reset_at_vana_midnight(self):
+        self.lua.execute("worn_head = 0")
+        self.frame()
+        self.lua.execute("bags[0][1] = { Id = 4467, Count = 11 }")
+        self.frame()
+        self.has(self.frame(), 'none on you')
+        self.lua.execute("harvest_day = os.time; local real = os.time; os.time = function () return real() + 3456 end")
+        self.has(self.frame(), 'still give a costume today: Garlic Cracker')
+
+    def test_buy_mentions_valeriano_and_crackers(self):
         self.lua.execute("worn_head = 0; bags[0][1] = nil")
         drawn = self.frame()
-        self.assertTrue(any('Valeriano sells Ginger Cookies' in t for t in drawn), drawn)
+        self.has(drawn, 'Valeriano sells Ginger Cookies')
+        self.has(drawn, 'Garlic Crackers, 4 gil')
 
     def test_full_bag(self):
         self.lua.execute("worn_head = 0; sizes[0] = 3")  # two slots, both used
+        self.has(self.frame(), 'Free one inventory slot')
+
+    def test_pitchfork_names_this_towns_npcs(self):
         drawn = self.frame()
-        self.assertTrue(any('Free one inventory slot' in t for t in drawn), drawn)
+        self.has(drawn, 'Ghost (Kueh Igunahmori, Phamelise) and Skeleton (Corua, Ostalie), decoration at L-7')
 
     def test_commands(self):
         e = self.lua.table_from({'command': '/harvestmax auto off', 'blocked': False})

@@ -1,16 +1,20 @@
 # harvestmax
 
-The Harvest Festival with the fun taken out. One window tells you what to wear and what to trade so you get all eight festival pieces (Pumpkin Head, Pumpkin Head II, Trick Staff, Trick Staff II and their Horror/Treat upgrades) in the fewest treats.
+The Harvest Festival with the fun taken out. One window tells you what to wear and what to trade so you get all eight festival prizes (Pumpkin Head, Pumpkin Head II, Trick Staff, Trick Staff II and their Horror/Treat upgrades) in the fewest sweets. It also says what each townsperson's reply meant and how to get the festival's other rewards.
 
     /addon load harvestmax
 
-The rules come from Phoenix's `scripts/globals/harvest_festivals.lua`:
+The rules follow [Phoenix's wiki page](https://wiki.phoenix-xi.com/Harvest_Festival):
 
-- Festival NPCs: Apairemant, Corua, Machielle, Phamelise and Pourette in Southern San d'Oria; Antonian, Attarena and Vichuel in Northern San d'Oria (plus the Bastok and Windurst ones).
-- Trade **one** treat at a time. The whole stack is used up for a single try.
-- Each trade has a 1 in 3 chance at best, and you need a free inventory slot or the treat is wasted.
-- If you wear a festival piece, the only thing a trade can give is that piece's upgrade. So wear nothing festive until you have the four plain pieces, then wear the ones still waiting for upgrades.
-- The full set takes about 26 trades, and 36 is enough 9 times in 10. The cheapest treat is a Ginger Cookie for 12 gil, from Valeriano (in Southern San d'Oria when San d'Oria is first in conquest) or Ness Rugetomal (Windurst Waters).
+- Trade **one** sweet to a costumed townsperson (Southern and Northern San d'Oria, Bastok Mines and Markets, Windurst Waters and Woods). The whole stack is used up for a single try.
+- Each trade has a 5% chance of a prize you don't own. If you wear one of the prizes, you can win its upgrade instead. So wear nothing festive until you have the four plain pieces, then wear the ones still waiting for upgrades.
+- Otherwise you get a costume, but each kind of sweet gives a costume only once per Vana'diel day. After that, the same sweet only gets a "Thank you...". That's still a normal prize roll.
+- The full set takes about 160 trades, and 234 is enough 9 times in 10. The cheapest sweet is a Garlic Cracker for 4 gil, from Ghebi Damomohe in Lower Jeuno.
+
+The window also shows:
+
+- which of your sweets still give a costume today, and which costume the nearest townsperson gives
+- the Pitchfork, Pitchfork +1, Witch Hat and Coven Hat, with how to get each. For the Pitchfork it names the townsfolk who give your town's costume pair.
 
 Commands (`/hmax` works too):
 
@@ -22,4 +26,4 @@ Commands (`/hmax` works too):
 
 Nothing is sent to the server except what your own `/equip` commands send.
 
-Tests: `python tests/run.py` (needs lupa and a Phoenix checkout at C:/code/Phoenix, or set `PHOENIX`).
+Tests: `python tests/run.py` (needs lupa).

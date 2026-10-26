@@ -1,16 +1,17 @@
 --[[
-* harvestmax core: the Harvest Festival trade rules as Phoenix's server runs them
-* (scripts/globals/harvest_festivals.lua, onHalloweenTrade), and what to do next.
+* harvestmax core: the Harvest Festival trade rules as Phoenix runs them, and what to do next.
 *
-* Per trade of one treat to a festival NPC:
-*   - if your head or main hand is Pumpkin Head (II) or Trick Staff (II), the only possible item
-*     is that piece's upgrade (Horror Head (II), Treat Staff (II)), checked head first, and none
-*     at all if you already own the upgrades of what you wear
-*   - otherwise it picks one of the four plain pieces at random, up to 4 times, until it finds one
-*     you don't own (the table.remove there is a no-op on LuaJIT, so the draws repeat)
-*   - you get that item 1 time in 3 (math.randomInt(1, 3) < 2), and only with a free inventory slot
-*   - the whole trade is used up either way, so a stack of 12 cookies is 12 cookies gone for 1 try
-* "Own" means anywhere: the server's hasItem looks in every bag, Mog Safe included.
+* The rules come from Phoenix's wiki page (wiki.phoenix-xi.com/Harvest_Festival, generated from
+* "Phoenix game beta 136ed7307def"). That event code is not in the public Phoenix repo, whose
+* scripts/globals/harvest_festivals.lua is an older 1-in-3 version the live server doesn't run.
+*
+* Per trade of one sweet to a costumed townsperson:
+*   - 5% chance of a prize you don't own yet: one of the four plain pieces, or, while you wear a
+*     piece, its upgrade instead (the wiki gives no separate upgrade chance; 5% is assumed)
+*   - otherwise a costume, but each kind of sweet gives a costume only once per Vana'diel day;
+*     after that the same kind only gets a "Thank you..." and the sweet is gone
+*   - the whole trade is used up either way, so trade one sweet at a time
+* "Own" means anywhere: prizes you keep in storage still count as owned.
 --]]
 
 local core = { };
@@ -31,7 +32,7 @@ core.NAMES = {
     [17587] = 'Trick Staff II',  [17588] = 'Treat Staff II',
 };
 
--- The four pieces a plain trade can give, each with its upgrade and slot (in the server's order).
+-- The four plain prizes, each with its upgrade and slot.
 core.PIECES = {
     { id = 13916, up = 13917, slot = 'head' },
     { id = 15176, up = 15177, slot = 'head' },
@@ -41,74 +42,162 @@ core.PIECES = {
 
 core.ALL = { 13916, 13917, 15176, 15177, 17565, 17566, 17587, 17588 };
 
--- Treats the NPCs take, with the cheapest NPC price Phoenix has for each (nil: none sold).
--- Lebkuchen House is left out: the server's list marks it "breaks".
+core.PRIZE = 0.05;
+
+-- The sweets the townsfolk take (the wiki's list), with the cheapest NPC price in Phoenix's shops
+-- and who sells it (nil: no NPC sells it).
 core.TREATS = {
-    [4394] = { name = 'Ginger Cookie',      price = 12 },
-    [4397] = { name = 'Cinna-cookie',       price = 15 },
-    [4510] = { name = 'Acorn Cookie',       price = 24 },
-    [4495] = { name = 'Goblin Chocolate',   price = 35 },
-    [5567] = { name = 'Dried Date',         price = 200 },
-    [4406] = { name = 'Baked Apple',        price = 440 },
-    [4393] = { name = 'Orange Kuchen',      price = 975 },
-    [5718] = { name = 'Cream Puff',         price = 1300 },
-    [5577] = { name = 'Sutlac',             price = 1500 },
-    [5572] = { name = 'Irmik Helvasi',      price = 2075 },
-    [5729] = { name = 'Bavarois',           price = 3360 },
-    [4556] = { name = 'Icecap Rolanberry',  price = 5544 },
-    [5646] = { name = 'Bloody Chocolate' },  [4496] = { name = 'Bubble Chocolate' },
-    [4413] = { name = 'Apple Pie' },         [4488] = { name = "Jack-o'-Pie" },
-    [4421] = { name = 'Melon Pie' },         [4563] = { name = 'Pamama Tart' },
-    [4446] = { name = 'Pumpkin Pie' },       [4414] = { name = 'Rolanberry Pie' },
-    [5745] = { name = 'Cherry Bavarois' },   [5653] = { name = 'Cherry Muffin' },
-    [5655] = { name = 'Coffee Muffin' },     [5144] = { name = 'Crimson Jelly' },
-    [5681] = { name = 'Cupid Chocolate' },   [5672] = { name = 'Dried Berry' },
-    [5614] = { name = 'Konigskuchen' },      [5230] = { name = 'Love Chocolate' },
-    [4502] = { name = 'Marron Glace' },      [5147] = { name = 'Snoll Gelato' },
-    [4270] = { name = 'Sweet Rice Cake' },   [5645] = { name = 'Witch Nougat' },
-    [5552] = { name = 'Black Pudding' },     [5550] = { name = 'Buche au Chocolat' },
-    [5633] = { name = 'Chocolate Cake' },    [5542] = { name = 'Gateau aux Fraises' },
-    [5625] = { name = 'Maple Cake' },        [5559] = { name = 'Mille Feuille' },
-    [5557] = { name = 'Mont Blanc' },        [5629] = { name = 'Orange Cake' },
-    [5631] = { name = 'Pumpkin Cake' },      [5627] = { name = 'Yogurt Cake' },
+    [4467] = { name = 'Garlic Cracker',    price = 4,    shop = 'Ghebi Damomohe, Lower Jeuno' },
+    [4394] = { name = 'Ginger Cookie',     price = 12,   shop = 'Ness Rugetomal, Windurst Waters; Valeriano' },
+    [4397] = { name = 'Cinna-cookie',      price = 15,   shop = 'Ness Rugetomal, Windurst Waters' },
+    [4510] = { name = 'Acorn Cookie',      price = 24,   shop = 'Ness Rugetomal, Windurst Waters' },
+    [4495] = { name = 'Goblin Chocolate',  price = 35,   shop = 'Pawkrix, Lower Jeuno' },
+    [5567] = { name = 'Dried Date',        price = 200,  shop = 'Khaf Jhifanm, Aht Urhgan Whitegate' },
+    [4406] = { name = 'Baked Apple',       price = 440,  shop = 'Glyke, Upper Jeuno' },
+    [4539] = { name = 'Goblin Pie',        price = 650,  shop = 'Pawkrix, Lower Jeuno' },
+    [4393] = { name = 'Orange Kuchen',     price = 975,  shop = 'Taajiji, Windurst Waters' },
+    [5577] = { name = 'Sutlac',            price = 1500, shop = 'Yafaaf, Aht Urhgan Whitegate' },
+    [5572] = { name = 'Irmik Helvasi',     price = 2075, shop = 'Fayeewah, Aht Urhgan Whitegate' },
+    [4556] = { name = 'Icecap Rolanberry', price = 5544, shop = 'Yoskolo, Lower Jeuno' },
+    [4413] = { name = 'Apple Pie' },         [4320] = { name = 'Apple Pie +1' },
+    [4496] = { name = 'Bubble Chocolate' },  [4269] = { name = 'Bijou Glace' },
+    [5552] = { name = 'Black Pudding' },     [4520] = { name = 'Coin Cookie' },
+    [5144] = { name = 'Crimson Jelly' },     [5574] = { name = 'Dried Date +1' },
+    [5553] = { name = 'Dusky Indulgence' },  [5555] = { name = 'Flurry Courante' },
+    [4280] = { name = 'Garlic Cracker +1' }, [5542] = { name = 'Gateau aux Fraises' },
+    [4497] = { name = 'Heart Chocolate' },   [4324] = { name = 'Hobgoblin Chocolate' },
+    [4325] = { name = 'Hobgoblin Pie' },     [5573] = { name = 'Irmik Helvasi +1' },
+    [5614] = { name = 'Konigskuchen' },      [4502] = { name = 'Marron Glace' },
+    [4421] = { name = 'Melon Pie' },         [4523] = { name = 'Melon Pie +1' },
+    [5543] = { name = 'Midwinter Dream' },   [4287] = { name = 'Opo-opo Tart' },
+    [4332] = { name = 'Orange Kuchen +1' },  [4563] = { name = 'Pamama Tart' },
+    [4446] = { name = 'Pumpkin Pie' },       [4525] = { name = 'Pumpkin Pie +1' },
+    [4281] = { name = 'Red Hot Cracker' },   [4339] = { name = 'Rolanberry Pie +1' },
+    [4414] = { name = 'Rolanberry Pie' },    [5147] = { name = 'Snoll Gelato' },
+    [4594] = { name = 'Snowy Rolanberry' },  [4466] = { name = 'Spicy Cracker' },
+    [5554] = { name = "Squirrel's Delight" }, [5578] = { name = 'Sutlac +1' },
+    [4336] = { name = 'Sweet Baked Apple' }, [4270] = { name = 'Sweet Rice Cake' },
+    [5615] = { name = 'Uberkuchen' },        [5158] = { name = 'Vermillion Jelly' },
+    [4577] = { name = 'Wild Cookie' },       [4576] = { name = 'Wizard Cookie' },
 };
 
--- The NPCs that take treats, by zone id (names as the client shows them).
+-- The costumed townsfolk by zone id, with the costume each gives (names as the client shows them).
 core.NPCS = {
-    [230] = { 'Apairemant', 'Corua', 'Machielle', 'Phamelise', 'Pourette' },        -- Southern San d'Oria
-    [231] = { 'Antonian', 'Attarena', 'Vichuel' },                                  -- Northern San d'Oria
-    [234] = { 'Aulavia', 'Emaliveulaux', 'Faustin', 'Mille', 'Proud Beard' },       -- Bastok Mines
-    [235] = { 'Olwyn' },                                                            -- Bastok Markets
-    [238] = { 'Ahyeekih', 'Ensasa', 'Maqu Molpih', 'Ness Rugetomal', 'Upih Khachla' }, -- Windurst Waters
-    [241] = { 'Millerovieunet', 'Nhobi Zalkia', 'Taraihi-Perunhi' },                -- Windurst Woods
+    [230] = { -- Southern San d'Oria
+        ['Apairemant'] = 'Shadow', ['Aveline'] = 'Orc', ['Benaige'] = 'Hound', ['Corua'] = 'Skeleton',
+        ['Kueh Igunahmori'] = 'Ghost', ['Lotte'] = 'Quadav', ['Lusiane'] = 'Yagudo', ['Machielle'] = 'Yagudo',
+        ['Malecharisant'] = 'Shadow', ['Ostalie'] = 'Skeleton', ['Paunelie'] = 'Hound', ['Phamelise'] = 'Ghost',
+        ['Pourette'] = 'Orc',
+    },
+    [231] = { -- Northern San d'Oria
+        ['Antonian'] = 'Hound', ['Attarena'] = 'Orc', ['Justi'] = 'Yagudo', ['Palguevion'] = 'Shadow',
+        ['Pirvidiauce'] = 'Skeleton', ['Tavourine'] = 'Quadav', ['Vichuel'] = 'Ghost',
+        ['Trick Bones'] = 'Quadav', ['Trick Ghast'] = 'Yagudo', ['Trick Ghost'] = 'Skeleton',
+        ['Trick Phantom'] = 'Shadow', ['Trick Shade'] = 'Yagudo', ['Trick Shadow'] = 'Orc',
+        ['Trick Skeleton'] = 'Hound', ['Trick Specter'] = 'Quadav', ['Trick Spirit'] = 'Ghost',
+        ['Trick Wight'] = 'Orc',
+    },
+    [234] = { -- Bastok Mines
+        ['Aulavia'] = 'Ghost', ['Deegis'] = 'Orc', ['Emaliveulaux'] = 'Skeleton', ['Faustin'] = 'Hound',
+        ['Galdeo'] = 'Skeleton', ['Griselda'] = 'Ghost', ['Maymunah'] = 'Quadav', ['Mille'] = 'Quadav',
+        ['Neigepance'] = 'Shadow', ['Odoba'] = 'Yagudo', ['Proud Beard'] = 'Shadow', ['Tibelda'] = 'Yagudo',
+    },
+    [235] = { -- Bastok Markets
+        ['Belizieg'] = 'Orc', ['Carmelide'] = 'Hound', ['Charging Chocobo'] = 'Skeleton', ['Ciqala'] = 'Quadav',
+        ['Harmodios'] = 'Shadow', ['Olwyn'] = 'Ghost', ['Peritrage'] = 'Yagudo', ['Visala'] = 'Hound',
+        ['Trick Bones'] = 'Ghost', ['Trick Ghast'] = 'Shadow', ['Trick Ghost'] = 'Hound',
+        ['Trick Phantom'] = 'Quadav', ['Trick Shade'] = 'Shadow', ['Trick Shadow'] = 'Skeleton',
+        ['Trick Skeleton'] = 'Yagudo', ['Trick Specter'] = 'Ghost', ['Trick Spirit'] = 'Orc',
+        ['Trick Wight'] = 'Skeleton',
+    },
+    [238] = { -- Windurst Waters
+        ['Ahyeekih'] = 'Shadow', ['Ensasa'] = 'Skeleton', ['Hilkomu-Makimu'] = 'Yagudo', ['Maqu Molpih'] = 'Orc',
+        ['Ness Rugetomal'] = 'Hound', ['Orez-Ebrez'] = 'Orc', ['Shohrun-Tuhrun'] = 'Quadav', ['Upih Khachla'] = 'Ghost',
+        ['Trick Bones'] = 'Orc', ['Trick Ghast'] = 'Quadav', ['Trick Ghost'] = 'Yagudo',
+        ['Trick Phantom'] = 'Ghost', ['Trick Shade'] = 'Quadav', ['Trick Shadow'] = 'Hound',
+        ['Trick Skeleton'] = 'Shadow', ['Trick Specter'] = 'Orc', ['Trick Spirit'] = 'Skeleton',
+        ['Trick Wight'] = 'Hound',
+    },
+    [241] = { -- Windurst Woods
+        ['Bin Stejihna'] = 'Skeleton', ['Kuzah Hpirohpon'] = 'Yagudo', ['Meriri'] = 'Quadav',
+        ['Millerovieunet'] = 'Orc', ['Mono Nchaa'] = 'Hound', ['Nhobi Zalkia'] = 'Shadow',
+        ['Nya Labiccio'] = 'Yagudo', ['Quesse'] = 'Shadow', ['Retto-Marutto'] = 'Ghost',
+        ['Shih Tayuun'] = 'Skeleton', ['Taraihi-Perunhi'] = 'Ghost', ['Wije Tiren'] = 'Quadav',
+    },
 };
 
--- Who sells Ginger Cookies for 12 gil, by zone: Valeriano is only out in the town of the nation
--- first in conquest (the addon checks he is there), Ness Rugetomal always is.
+-- Each town's Pitchfork costume pair and decoration square.
+core.PITCHFORK = {
+    [230] = { 'Ghost', 'Skeleton', 'L-7' },
+    [231] = { 'Hound', 'Shadow', 'E-6' },
+    [234] = { 'Shadow', 'Skeleton', 'H-7' },
+    [235] = { 'Ghost', 'Hound', 'J-10' },
+    [238] = { 'Hound', 'Skeleton', 'E-9 (north map)' },
+    [241] = { 'Shadow', 'Ghost', 'G-9' },
+};
+
+-- The festival's other rewards, each with how to get it.
+core.EXTRAS = {
+    { id = 16075, name = 'Witch Hat', how = 'Wake of the Lilies: talk to Gertrude (Northern San d\'Oria D-8) out of costume, get a costume, then tail Poseaulloie (J-8/J-9) within 10 yalms without being in front of her within 6, for 10 progress messages. Take the costume off and report back before Vana\'diel midnight.' },
+    { id = 16076, name = 'Coven Hat', how = 'On a later Vana\'diel day, talk to Gertrude wearing the Witch Hat and tail the warier witch Maryse (E-6/F-6/F-7): she sees 9 yalms and turns more.' },
+    { id = 18102, name = 'Pitchfork', how = 'Party of exactly two: get your town\'s costume pair, one each, and both stand within 5 yalms of its Pitchfork decoration.' },
+    { id = 18103, name = 'Pitchfork +1', how = 'Same two, in another nation\'s city: each equips the Pitchfork and trades a sweet not used today to a townsperson that gives goblin costumes to their own nation\'s citizens, then both stand by that town\'s Pitchfork +1 decoration (Southern San d\'Oria E-7, Northern D-9).' },
+};
+
+-- Who sells 12-gil Ginger Cookies in a festival town: Valeriano only in the town of the nation
+-- first in conquest (the addon checks he is there), Ness Rugetomal always.
 core.COOKIE_SHOPS = {
     [230] = 'Valeriano', [236] = 'Valeriano', [241] = 'Valeriano', [238] = 'Ness Rugetomal',
 };
 
-core.CHANCE = 1 / 3;
+-- The server's Vana'diel day number: days run 3456 Earth seconds from its epoch (1009810800),
+-- which is a Vana'diel midnight. Costumes reset when this changes.
+function core.vana_day(unix)
+    return math.floor((unix - 1009810800) / 3456);
+end
 
--- The item one trade would aim for, as the server picks it. Returns an item id and its chance,
--- or 0 and 0 when the trade can give nothing.
-function core.target(owned, head, main)
-    for _, p in ipairs(core.PIECES) do
-        if (head == p.id or main == p.id) then
-            -- The server's upgrade chain, in its order.
-            if (head == core.PUMPKIN_HEAD and not owned[core.HORROR_HEAD]) then return core.HORROR_HEAD, core.CHANCE; end
-            if (head == core.PUMPKIN_HEAD_II and not owned[core.HORROR_HEAD_II]) then return core.HORROR_HEAD_II, core.CHANCE; end
-            if (main == core.TRICK_STAFF and not owned[core.TREAT_STAFF]) then return core.TREAT_STAFF, core.CHANCE; end
-            if (main == core.TRICK_STAFF_II and not owned[core.TREAT_STAFF_II]) then return core.TREAT_STAFF_II, core.CHANCE; end
-            return 0, 0;
+-- Seconds until the next Vana'diel midnight.
+function core.to_midnight(unix)
+    return 3456 - (unix - 1009810800) % 3456;
+end
+
+-- What the NPC's reply to a trade means, checked in this order ("Thank you..." starts the
+-- costume line too).
+core.REPLIES = {
+    { find = 'Here, take this',         kind = 'item' },
+    { find = 'And now for your treat',  kind = 'costume' },
+    { find = 'unexpected might happen', kind = 'costume' },
+    { find = 'Thank you...',            kind = 'nothing' },
+};
+
+function core.classify(text)
+    for _, r in ipairs(core.REPLIES) do
+        if (text:find(r.find, 1, true)) then
+            return r.kind;
         end
     end
-    local missing = core.missing_plain(owned);
-    if (missing == 0) then
-        return 0, 0;
+    return nil;
+end
+
+local function cap(s)
+    return s:sub(1, 1):upper() .. s:sub(2);
+end
+
+--[[
+* One line on what a reply meant, given the step the window showed just before the trade.
+--]]
+function core.explain(kind, before)
+    if (kind == 'item') then
+        return '"Here, take this...": the 5% prize roll hit.';
     end
-    return 'plain', core.plain_chance(missing);
+    local what = kind == 'costume' and 'a costume, no prize' or 'nothing';
+    if (before ~= nil and before.kind == 'gear') then
+        return ('%s: your gear was wrong for this trade (%s).'):format(cap(what), before.text:lower():gsub('%.$', ''));
+    end
+    if (kind == 'costume') then
+        return 'Costume: the 5% prize roll missed. That kind of sweet gives no more costumes today.';
+    end
+    return '"Thank you...": the 5% prize roll missed, and that kind of sweet already gave a costume today. Normal: keep going.';
 end
 
 function core.missing_plain(owned)
@@ -119,11 +208,6 @@ function core.missing_plain(owned)
     return n;
 end
 
--- Chance one plain trade gives a new piece with `missing` of the four still to get.
-function core.plain_chance(missing)
-    return core.CHANCE * (1 - ((4 - missing) / 4) ^ 4);
-end
-
 function core.collected(owned)
     local n = 0;
     for _, id in ipairs(core.ALL) do
@@ -132,19 +216,24 @@ function core.collected(owned)
     return n;
 end
 
---[[
-* The chance of each trade still ahead, in the order they come: the plain pieces first (no gear
-* swaps while farming them), then one upgrade per piece.
---]]
+-- The prize one trade aims for: an upgrade id, 'plain', or 0 for none; and its chance.
+function core.target(owned, head, main)
+    for _, p in ipairs(core.PIECES) do
+        if ((p.slot == 'head' and head == p.id) or (p.slot == 'main' and main == p.id)) and not owned[p.up] then
+            return p.up, core.PRIZE;
+        end
+    end
+    if (core.missing_plain(owned) > 0) then
+        return 'plain', core.PRIZE;
+    end
+    return 0, 0;
+end
+
+-- The chance of each prize still ahead: one per missing piece.
 function core.chances(owned)
     local list = { };
-    for k = core.missing_plain(owned), 1, -1 do
-        list[#list + 1] = core.plain_chance(k);
-    end
-    for _, p in ipairs(core.PIECES) do
-        if (not owned[p.up]) then
-            list[#list + 1] = core.CHANCE;
-        end
+    for _ = 1, #core.ALL - core.collected(owned) do
+        list[#list + 1] = core.PRIZE;
     end
     return list;
 end
@@ -153,37 +242,35 @@ end
 * How many more trades the whole set takes: the expected number and the number that is enough
 * `q` of the time (a sum of geometric waits, worked out exactly up to `cap` trades).
 --]]
-function core.trades_left(owned, q, cap)
-    q, cap = q or 0.9, cap or 600;
+function core.trades_left(owned, q, cap_n)
+    q, cap_n = q or 0.9, cap_n or 2000;
     local list = core.chances(owned);
-    local mean = 0;
-    for _, p in ipairs(list) do mean = mean + 1 / p; end
     if (#list == 0) then
         return 0, 0;
     end
-    -- dist[n] = chance the steps so far are done after exactly n trades.
+    local mean = 0;
+    for _, p in ipairs(list) do mean = mean + 1 / p; end
+    -- dist[n] = chance the prizes so far are all in after exactly n trades.
     local dist = { [0] = 1 };
     for _, p in ipairs(list) do
         local nxt, run = { [0] = 0 }, 0;
-        for n = 1, cap do
-            -- Finishing this step at n: either the previous ones finished at n-1 and this trade
-            -- hit, or this step was already waiting at n-1 and this trade hit.
+        for n = 1, cap_n do
             run = run * (1 - p) + (dist[n - 1] or 0);
             nxt[n] = run * p;
         end
         dist = nxt;
     end
     local sum = 0;
-    for n = 1, cap do
+    for n = 1, cap_n do
         sum = sum + dist[n];
         if (sum >= q) then
             return mean, n;
         end
     end
-    return mean, cap;
+    return mean, cap_n;
 end
 
--- The cheapest treat in your inventory (known shop prices first), or nil.
+-- The cheapest sweet in your inventory (known shop prices first), or nil.
 function core.best_treat(treats)
     local best, best_price;
     for id, count in pairs(treats) do
@@ -209,8 +296,9 @@ end
 --[[
 * What to wear for the next trade: { head = id or false, main = id or false }, where an id is the
 * piece to put on and false means "take off the piece you wear". nil for a slot to leave alone.
-* While any plain piece is missing nothing festive is worn; after that, the pieces still waiting
-* for their upgrades.
+* While any plain piece is missing nothing festive is worn (no swaps after each prize); after
+* that, the pieces still waiting for their upgrades. A worn piece whose upgrade you own comes off,
+* since the wiki doesn't say what a trade gives then.
 --]]
 function core.wanted_gear(owned, head, main)
     local is_piece = { };
@@ -245,14 +333,14 @@ end
 *   head, main   item ids worn (0 for none)
 *   free    empty inventory slots
 *   treats  [id] = count in your inventory
-*   npc     { name, dist } for the nearest festival NPC, or nil
+*   npc     { name, dist } for the nearest costumed townsperson, or nil
 *   shop    name of a 12-gil cookie seller here, or nil
 * Returns { kind, text, why, gear } with kind one of done, fetch, gear, free, buy, trade.
 --]]
 function core.next_step(s)
     local owned = s.owned;
     if (core.collected(owned) == #core.ALL) then
-        return { kind = 'done', text = 'All eight pieces collected. Nothing left to trade for.' };
+        return { kind = 'done', text = 'All eight prizes collected. Nothing left to trade for.' };
     end
     local want = core.wanted_gear(owned, s.head, s.main);
     for _, slot in ipairs({ 'head', 'main' }) do
@@ -273,29 +361,30 @@ function core.next_step(s)
                 parts[#parts + 1] = ('wear %s'):format(core.NAMES[id]);
             end
         end
-        local text = table.concat(parts, ', ');
         local why = core.missing_plain(owned) > 0
-            and 'Wearing a festival piece turns every trade into an upgrade try; plain pieces first.'
-            or 'Worn pieces are upgraded: 1 in 3 per trade.';
-        return { kind = 'gear', text = text:sub(1, 1):upper() .. text:sub(2) .. '.', why = why, gear = want };
+            and 'A worn piece turns the prize into its upgrade; plain pieces first, so no swaps after each prize.'
+            or 'Worn pieces win their upgrades.';
+        return { kind = 'gear', text = cap(table.concat(parts, ', ')) .. '.', why = why, gear = want };
     end
     if (s.free < 1) then
-        return { kind = 'free', text = 'Free one inventory slot.', why = 'With a full bag the treat is used up and nothing is given.' };
+        return { kind = 'free', text = 'Free one inventory slot.', why = 'A prize needs somewhere to go.' };
     end
     local treat = core.best_treat(s.treats);
     if (treat == nil) then
         local _, enough = core.trades_left(owned);
-        local where = s.shop ~= nil and ('%s sells Ginger Cookies for 12 gil here'):format(s.shop)
-            or 'Ginger Cookies: Valeriano (town of the nation first in conquest) or Ness Rugetomal (Windurst Waters), 12 gil; or the AH';
-        return { kind = 'buy', text = ('Buy about %d treats.'):format(enough), why = where .. '.' };
+        local where = 'Cheapest: Garlic Crackers, 4 gil from Ghebi Damomohe (Lower Jeuno)';
+        if (s.shop ~= nil) then
+            where = ('%s sells Ginger Cookies for 12 gil here. %s'):format(s.shop, where);
+        end
+        return { kind = 'buy', text = ('Buy about %d sweets.'):format(enough), why = where .. '.' };
     end
     local aim, chance = core.target(owned, s.head, s.main);
-    local npc = s.npc ~= nil and ('%s (%.0f yalms)'):format(s.npc.name, s.npc.dist) or 'a festival NPC';
+    local npc = s.npc ~= nil and ('%s (%.0f yalms)'):format(s.npc.name, s.npc.dist) or 'a costumed townsperson';
     local what = aim == 'plain' and 'a new piece' or core.NAMES[aim];
     return {
         kind = 'trade',
         text = ('Trade ONE %s to %s.'):format(core.TREATS[treat].name, npc),
-        why = ('1 in %.1f for %s. A whole stack is used up for a single try.'):format(1 / chance, what),
+        why = ('%.0f%% for %s. A whole stack is used up for a single try.'):format(chance * 100, what),
         treat = treat,
     };
 end

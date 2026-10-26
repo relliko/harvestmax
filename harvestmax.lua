@@ -1,13 +1,14 @@
 --[[
 * harvestmax
 *
-* The Harvest Festival with the fun taken out. Phoenix's festival NPCs (Southern and Northern
-* San d'Oria, Bastok, Windurst) take one treat per trade and give one of eight pieces. This window
-* says exactly what to wear and what to trade for the fewest treats, and keeps count.
+* The Harvest Festival with the fun taken out. Phoenix's costumed townsfolk (Southern and
+* Northern San d'Oria, Bastok, Windurst) take one sweet per trade, with a 5% chance of one of
+* eight prizes. This window says exactly what to wear and what to trade for the whole set in the
+* fewest sweets, what each reply meant, and how to get the festival's other rewards.
 *
-* How the server decides (see core.lua): wear nothing festive until you have all four plain
-* pieces, then wear the pieces whose upgrades you lack. Every trade is a 1 in 3 at best, a stack is
-* used up for one try, and a full bag wastes the treat. The whole set takes about 26 trades.
+* How it works (see core.lua): wear nothing festive until you have all four plain pieces, then
+* wear the pieces whose upgrades you lack. A stack is used up for one try. The whole set takes
+* about 160 trades; Garlic Crackers (4 gil, Lower Jeuno) are the cheapest sweet.
 *
 * Nothing is ever sent to the server by this addon. Gear swaps go through the game's own /equip
 * command (/harvestmax auto off to do them yourself); Target only moves your client's cursor.
@@ -15,9 +16,9 @@
 
 addon.name    = 'harvestmax';
 addon.author  = 'Relli';
-addon.version = '0.1';
-addon.desc    = 'Harvest Festival: what to wear and trade for the whole set in the fewest treats.';
-addon.link    = '';
+addon.version = '0.2';
+addon.desc    = 'Harvest Festival: what to wear and trade for every prize in the fewest sweets.';
+addon.link    = 'https://github.com/relliko/harvestmax';
 
 require('common');
 local chat     = require('chat');
@@ -27,17 +28,21 @@ local core     = require('core');
 
 local defaults = T{
     visible = true,
-    auto    = true, -- swap festival gear with /equip when the plan says so
+    auto    = true,  -- swap festival gear with /equip when the plan says so
     always  = false, -- show the window outside the festival towns too
+    day     = -1,    -- the Vana'diel day `used` belongs to
+    used    = T{ },  -- sweet ids traded that day (no more costumes from them)
 };
 
 local st = {
     settings = nil,
     s        = nil,  -- what core.next_step reads, refreshed 4 times a second
     step     = nil,
+    ready    = nil,  -- the step shown before the latest trade, to explain its reply
     at       = -1,
-    treats   = nil,  -- treat total last refresh
-    owned    = nil,  -- owned pieces last refresh
+    treats   = nil,  -- [id] = count last refresh
+    owned    = nil,  -- owned prizes last refresh
+    last     = nil,  -- what the latest reply meant
     trades   = 0,    -- this session
     hits     = 0,
     wasted   = 0,
@@ -56,6 +61,12 @@ local function line(color, text)
     imgui.TextColored(color, (text:gsub('%%', '%%%%')));
 end
 
+local function wrapped(color, text)
+    imgui.PushTextWrapPos(imgui.GetCursorPosX() + 340);
+    line(color, text);
+    imgui.PopTextWrapPos();
+end
+
 local function msg(text)
     print(chat.header(addon.name):append(chat.message(text)));
 end
@@ -70,8 +81,21 @@ local function worn(inv, slot)
     return (it ~= nil and it.Id ~= 65535) and (it.Id or 0) or 0;
 end
 
-local PIECE = { };
-for _, id in ipairs(core.ALL) do PIECE[id] = true; end
+local TRACKED = { };
+for _, id in ipairs(core.ALL) do TRACKED[id] = true; end
+for _, x in ipairs(core.EXTRAS) do TRACKED[x.id] = true; end
+
+-- The sweets traded this Vana'diel day, emptied at Vana'diel midnight.
+local function used_today()
+    local day = core.vana_day(os.time());
+    if (st.settings.day ~= day) then
+        st.settings.day, st.settings.used = day, T{ };
+        settings.save();
+    end
+    local set = { };
+    for _, id in ipairs(st.settings.used) do set[id] = true; end
+    return set;
+end
 
 -- Everything core.next_step needs, read from client memory.
 local function read()
@@ -88,7 +112,7 @@ local function read()
             if (id == 0 or id == 65535) then
                 if (c == 0) then s.free = s.free + 1; end
             else
-                if (PIECE[id]) then
+                if (TRACKED[id]) then
                     s.owned[id] = true;
                     if (EQUIP_BAGS[c]) then s.bag[id] = true; end
                 end
@@ -100,21 +124,20 @@ local function read()
     end
     s.head, s.main = worn(inv, SLOT.head), worn(inv, SLOT.main);
 
-    local want = { };
-    for _, name in ipairs(core.NPCS[s.zone] or { }) do want[name] = true; end
+    local town = core.NPCS[s.zone] or { };
     local shop = core.COOKIE_SHOPS[s.zone];
     local me = party:GetMemberTargetIndex(0) or 0;
     s.status = me ~= 0 and ent:GetStatus(me) or 0;
     for i = 1, 0x3FF do
         if (bit.band(ent:GetRenderFlags0(i) or 0, 0x200) ~= 0) then
             local name = ent:GetName(i);
-            if (name ~= nil and (want[name] or name == shop)) then
+            if (name ~= nil and (town[name] or name == shop)) then
                 local d = math.sqrt(ent:GetDistance(i) or 0);
                 if (name == shop) then
                     s.shop = shop;
                 end
-                if (want[name] and (s.npc == nil or d < s.npc.dist)) then
-                    s.npc = { name = name, dist = d, idx = i };
+                if (town[name] and (s.npc == nil or d < s.npc.dist)) then
+                    s.npc = { name = name, dist = d, idx = i, costume = town[name] };
                 end
             end
         end
@@ -122,15 +145,32 @@ local function read()
     return s;
 end
 
--- Session counts: a trade is treats going down beside a festival NPC.
+-- Session counts: a trade is sweets going down beside a costumed townsperson.
 local function count(s)
     local total = core.treat_count(s.treats);
-    if (st.treats ~= nil and total < st.treats and s.npc ~= nil and s.npc.dist < 8) then
-        local gone = st.treats - total;
-        st.trades = st.trades + 1;
-        if (gone > 1) then
-            st.wasted = st.wasted + gone - 1;
-            msg(('That trade used up %d treats for one try. Trade them one at a time.'):format(gone));
+    local traded = false;
+    if (st.treats ~= nil and s.npc ~= nil and s.npc.dist < 8) then
+        local gone, kinds = 0, { };
+        for id, n in pairs(st.treats) do
+            local now = s.treats[id] or 0;
+            if (now < n) then
+                gone = gone + n - now;
+                kinds[#kinds + 1] = id;
+            end
+        end
+        if (gone > 0) then
+            traded = true;
+            st.trades = st.trades + 1;
+            if (gone > 1) then
+                st.wasted = st.wasted + gone - 1;
+                msg(('That trade used up %d sweets for one try. Trade them one at a time.'):format(gone));
+            end
+            local used = used_today();
+            local list = st.settings.used;
+            for _, id in ipairs(kinds) do
+                if (not used[id]) then list[#list + 1] = id; end
+            end
+            settings.save();
         end
     end
     if (st.owned ~= nil) then
@@ -141,7 +181,8 @@ local function count(s)
             end
         end
     end
-    st.treats, st.owned = total, s.owned;
+    st.treats, st.owned = s.treats, s.owned;
+    return traded, total;
 end
 
 local function equip(gear)
@@ -170,8 +211,11 @@ local function refresh()
     if (not ok or s == nil) then
         return;
     end
-    count(s);
+    local traded = count(s);
     st.s, st.step = s, core.next_step(s);
+    if (not traded) then
+        st.ready = st.step;
+    end
     -- Swap only standing idle in a festival town: once per new plan, retried every 15 seconds.
     if (st.step.kind == 'gear' and st.settings.auto and in_festival_town(s) and s.status == 0) then
         local key = st.step.text;
@@ -182,20 +226,47 @@ local function refresh()
     end
 end
 
+-- Who in this town gives a costume: "Kueh Igunahmori, Phamelise".
+local function givers(zone, costume)
+    local names = { };
+    for name, c in pairs(core.NPCS[zone] or { }) do
+        if (c == costume) then names[#names + 1] = name; end
+    end
+    table.sort(names);
+    return table.concat(names, ', ');
+end
+
+local function draw_extras(s)
+    if (not imgui.CollapsingHeader('Other festival rewards')) then
+        return;
+    end
+    local pair = core.PITCHFORK[s.zone];
+    for _, x in ipairs(core.EXTRAS) do
+        local have = s.owned[x.id];
+        line(have and GOOD or NEXT, ('%s %s'):format(have and '+' or '-', x.name));
+        if (not have) then
+            local how = x.how;
+            if (x.id == 18102 and pair ~= nil) then
+                how = how .. (' Here: %s (%s) and %s (%s), decoration at %s.'):format(
+                    pair[1], givers(s.zone, pair[1]), pair[2], givers(s.zone, pair[2]), pair[3]);
+            end
+            wrapped(NONE, how);
+        end
+    end
+end
+
 local function draw()
     local s, step = st.s, st.step;
     if (s == nil or not st.settings.visible or not (st.settings.always or in_festival_town(s))) then
         return;
     end
-    imgui.SetNextWindowSize({ 360, -1 }, ImGuiCond_FirstUseEver);
+    imgui.SetNextWindowSize({ 370, -1 }, ImGuiCond_FirstUseEver);
     local open = { true };
     if (imgui.Begin('harvestmax', open, ImGuiWindowFlags_AlwaysAutoResize)) then
         local have = core.collected(s.owned);
         line(NEXT, step.text);
         if (step.why ~= nil) then
-            imgui.PushTextWrapPos(340);
-            line(NONE, step.why);
-            imgui.PopTextWrapPos();
+            wrapped(NONE, step.why);
         end
         if (step.kind == 'gear' and imgui.Button('Equip now')) then
             st.equip_at = os.clock();
@@ -206,8 +277,11 @@ local function draw()
                 pcall(function () AshitaCore:GetMemoryManager():GetTarget():SetTarget(s.npc.idx, false); end);
             end
         end
+        if (st.last ~= nil) then
+            wrapped(st.last.kind == 'item' and GOOD or NONE, 'Last trade: ' .. st.last.text);
+        end
         imgui.Separator();
-        line(have == 8 and GOOD or NEXT, ('%d of 8 pieces'):format(have));
+        line(have == 8 and GOOD or NEXT, ('%d of 8 prizes'):format(have));
         for _, p in ipairs(core.PIECES) do
             line(s.owned[p.id] and GOOD or NONE, ('  %s %-16s'):format(s.owned[p.id] and '+' or '-', core.NAMES[p.id]));
             imgui.SameLine();
@@ -217,16 +291,29 @@ local function draw()
             local mean, enough = core.trades_left(s.owned);
             local treats = core.treat_count(s.treats);
             imgui.Separator();
-            line(NONE, ('Trades left: about %.0f, %d covers 9 runs in 10.'):format(mean, enough));
-            line(treats >= enough and GOOD or NONE, ('Treats on you: %d (%d gil of Ginger Cookies covers it).'):format(treats, enough * 12));
+            line(NONE, ('Trades left: about %.0f; %d covers 9 runs in 10.'):format(mean, enough));
+            line(treats >= enough and GOOD or NONE, ('Sweets on you: %d (%d gil of Garlic Crackers covers it).'):format(treats, enough * 4));
             if (s.free < 1) then
-                line(WARN, 'Inventory full: a trade now gives nothing.');
+                line(WARN, 'Inventory full: free a slot before trading.');
             end
         end
-        if (st.trades > 0) then
-            line(NONE, ('This session: %d trades, %d pieces%s.'):format(st.trades, st.hits,
-                st.wasted > 0 and (', %d treats wasted in stacks'):format(st.wasted) or ''));
+        -- Costumes matter for the Pitchfork and the witch hats, not for prizes.
+        local used, fresh = used_today(), { };
+        for id in pairs(s.treats) do
+            if (not used[id]) then fresh[#fresh + 1] = core.TREATS[id].name; end
         end
+        table.sort(fresh);
+        imgui.Separator();
+        wrapped(NONE, ('Sweets that still give a costume today: %s. Resets in %d min.'):format(
+            #fresh > 0 and table.concat(fresh, ', ') or 'none on you', math.ceil(core.to_midnight(os.time()) / 60)));
+        if (s.npc ~= nil) then
+            line(NONE, ('%s gives the %s costume.'):format(s.npc.name, s.npc.costume));
+        end
+        if (st.trades > 0) then
+            line(NONE, ('This session: %d trades, %d prizes%s.'):format(st.trades, st.hits,
+                st.wasted > 0 and (', %d sweets wasted in stacks'):format(st.wasted) or ''));
+        end
+        draw_extras(s);
         line(NONE, ('Auto equip %s (/harvestmax auto).'):format(st.settings.auto and 'on' or 'off'));
     end
     imgui.End();
@@ -249,6 +336,24 @@ ashita.events.register('d3d_present', 'harvestmax_present', function ()
     end
     refresh();
     draw();
+end);
+
+-- The townsperson's reply to a trade, explained in the window.
+ashita.events.register('text_in', 'harvestmax_text', function (e)
+    local s = st.s;
+    if (s == nil or s.npc == nil or s.npc.dist > 8 or e.injected) then
+        return;
+    end
+    local kind = core.classify(e.message or '');
+    if (kind == nil) then
+        return;
+    end
+    local now = os.clock();
+    -- One trade can print two lines (costume, then its hint): keep the first.
+    if (st.last ~= nil and now - st.last.at < 1.5) then
+        return;
+    end
+    st.last = { kind = kind, at = now, text = core.explain(kind, st.ready) };
 end);
 
 ashita.events.register('command', 'harvestmax_command', function (e)
