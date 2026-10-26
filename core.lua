@@ -126,23 +126,109 @@ core.NPCS = {
     },
 };
 
--- Each town's Pitchfork costume pair and decoration square.
-core.PITCHFORK = {
-    [230] = { 'Ghost', 'Skeleton', 'L-7' },
-    [231] = { 'Hound', 'Shadow', 'E-6' },
-    [234] = { 'Shadow', 'Skeleton', 'H-7' },
-    [235] = { 'Ghost', 'Hound', 'J-10' },
-    [238] = { 'Hound', 'Skeleton', 'E-9 (north map)' },
-    [241] = { 'Shadow', 'Ghost', 'G-9' },
+core.TOWNS = {
+    [230] = "Southern San d'Oria", [231] = "Northern San d'Oria", [234] = 'Bastok Mines',
+    [235] = 'Bastok Markets', [238] = 'Windurst Waters', [241] = 'Windurst Woods',
 };
 
--- The festival's other rewards, each with how to get it.
-core.EXTRAS = {
-    { id = 16075, name = 'Witch Hat', how = 'Wake of the Lilies: talk to Gertrude (Northern San d\'Oria D-8) out of costume, get a costume, then tail Poseaulloie (J-8/J-9) within 10 yalms without being in front of her within 6, for 10 progress messages. Take the costume off and report back before Vana\'diel midnight.' },
-    { id = 16076, name = 'Coven Hat', how = 'On a later Vana\'diel day, talk to Gertrude wearing the Witch Hat and tail the warier witch Maryse (E-6/F-6/F-7): she sees 9 yalms and turns more.' },
-    { id = 18102, name = 'Pitchfork', how = 'Party of exactly two: get your town\'s costume pair, one each, and both stand within 5 yalms of its Pitchfork decoration.' },
-    { id = 18103, name = 'Pitchfork +1', how = 'Same two, in another nation\'s city: each equips the Pitchfork and trades a sweet not used today to a townsperson that gives goblin costumes to their own nation\'s citizens, then both stand by that town\'s Pitchfork +1 decoration (Southern San d\'Oria E-7, Northern D-9).' },
+-- Which nation each town belongs to (the game's nation numbers: 0 San d'Oria, 1 Bastok, 2 Windurst).
+core.TOWN_NATION = { [230] = 0, [231] = 0, [234] = 1, [235] = 1, [238] = 2, [241] = 2 };
+core.NATIONS = { [0] = "San d'Oria", [1] = 'Bastok', [2] = 'Windurst' };
+
+-- Each town's Pitchfork costume pair and decoration square, and its Pitchfork +1 decoration.
+core.PITCHFORK = {
+    [230] = { 'Ghost', 'Skeleton', 'L-7', 'E-7' },
+    [231] = { 'Hound', 'Shadow', 'E-6', 'D-9' },
+    [234] = { 'Shadow', 'Skeleton', 'H-7', 'E-8' },
+    [235] = { 'Ghost', 'Hound', 'J-10', 'G-4' },
+    [238] = { 'Hound', 'Skeleton', 'E-9 (north map)', 'K-6 (north map)' },
+    [241] = { 'Shadow', 'Ghost', 'G-9', 'I-6' },
 };
+
+-- Townsfolk who give a goblin costume, instead of their own, to a citizen of `nation` holding a
+-- Pitchfork: [zone][name] = nation.
+core.GOBLIN = {
+    [230] = { ['Aveline'] = 0, ['Lotte'] = 1, ['Lusiane'] = 2, ['Machielle'] = 2 },
+    [231] = { ['Antonian'] = 0, ['Attarena'] = 0, ['Justi'] = 2, ['Tavourine'] = 1, ['Trick Bones'] = 1,
+              ['Trick Ghast'] = 2, ['Trick Shade'] = 2, ['Trick Wight'] = 0 },
+    [234] = { ['Deegis'] = 0, ['Maymunah'] = 1, ['Mille'] = 1, ['Tibelda'] = 2 },
+    [235] = { ['Belizieg'] = 0, ['Ciqala'] = 1, ['Peritrage'] = 2, ['Trick Phantom'] = 1,
+              ['Trick Skeleton'] = 2, ['Trick Spirit'] = 0 },
+    [238] = { ['Hilkomu-Makimu'] = 2, ['Maqu Molpih'] = 0, ['Shohrun-Tuhrun'] = 1, ['Trick Bones'] = 0,
+              ['Trick Ghast'] = 1, ['Trick Ghost'] = 2, ['Trick Shade'] = 1, ['Trick Specter'] = 0 },
+    [241] = { ['Meriri'] = 1, ['Millerovieunet'] = 0, ['Nya Labiccio'] = 2, ['Wije Tiren'] = 1 },
+};
+
+-- Wake of the Lilies, by the zone its exorcist stands in: exorcist, witch, warier witch.
+core.LILIES = {
+    [231] = { 'Gertrude (D-8)', 'Poseaulloie (J-8, J-9)', 'Maryse (E-6, F-6, F-7)' },
+    [235] = { 'Brian (G-9)', 'Selma (H-8, H-9)', 'Pretty Heart (F-7, G-7, G-8)' },
+    [238] = { 'Roger (F-5, north map)', 'Bikho Ronpotteh (F-8, G-8, north map)', 'Guwanana (H-7, I-6, south map)' },
+};
+
+-- The exorcist nearest a town: its own, else its nation's.
+local LILIES_FOR = { [230] = 231, [231] = 231, [234] = 235, [235] = 235, [238] = 238, [241] = 238 };
+
+-- Who in `zone` gives `costume`: "Kueh Igunahmori, Phamelise".
+function core.givers(zone, costume)
+    local names = { };
+    for name, c in pairs(core.NPCS[zone] or { }) do
+        if (c == costume) then names[#names + 1] = name; end
+    end
+    table.sort(names);
+    return table.concat(names, ', ');
+end
+
+-- Who in `zone` gives a goblin costume to a Pitchfork-holding citizen of `nation`.
+function core.goblin_givers(zone, nation)
+    local names = { };
+    for name, n in pairs(core.GOBLIN[zone] or { }) do
+        if (n == nation) then names[#names + 1] = name; end
+    end
+    table.sort(names);
+    return table.concat(names, ', ');
+end
+
+--[[
+* The festival's other rewards, each with how to get it, told for the town you're in (`zone`) and
+* your nation (`nation`, nil when unknown): { id, name, how }.
+--]]
+function core.extras(zone, nation)
+    local town = core.TOWNS[zone] or 'a festival town';
+    local lz = LILIES_FOR[zone] or 231;
+    local exorcist, witch, warier = core.LILIES[lz][1], core.LILIES[lz][2], core.LILIES[lz][3];
+    local where = lz == zone and '' or (' in %s'):format(core.TOWNS[lz]);
+    local list = {
+        { id = 16075, name = 'Witch Hat',
+          how = ('Wake of the Lilies: talk to %s%s out of costume, get a costume, then tail %s within 10 yalms without being in front of her within 6, for 10 progress messages. Take the costume off and report back before Vana\'diel midnight.'):format(exorcist, where, witch) },
+        { id = 16076, name = 'Coven Hat',
+          how = ('On a later Vana\'diel day, talk to %s%s wearing the Witch Hat and tail the warier witch %s: she sees 9 yalms and turns more.'):format(exorcist, where, warier) },
+    };
+    local fork = core.PITCHFORK[zone];
+    local how = 'Party of exactly two: get the town\'s costume pair, one each, and both stand within 5 yalms of its Pitchfork decoration.';
+    if (fork ~= nil) then
+        how = how .. (' In %s: %s (%s) and %s (%s), decoration at %s.'):format(town,
+            fork[1], core.givers(zone, fork[1]), fork[2], core.givers(zone, fork[2]), fork[3]);
+    end
+    list[#list + 1] = { id = 18102, name = 'Pitchfork', how = how };
+    how = 'The same two, in another nation\'s city than where you got the Pitchforks: each equips their Pitchfork and trades a sweet not used today to a townsperson who gives their own nation\'s citizens a goblin costume, then both stand within 5 yalms of that town\'s Pitchfork +1 decoration.';
+    if (fork ~= nil) then
+        local who;
+        if (nation ~= nil and core.NATIONS[nation] ~= nil) then
+            who = ('%s citizens: %s'):format(core.NATIONS[nation], core.goblin_givers(zone, nation));
+        else
+            local parts = { };
+            for n = 0, 2 do
+                parts[#parts + 1] = ('%s: %s'):format(core.NATIONS[n], core.goblin_givers(zone, n));
+            end
+            who = table.concat(parts, '; ');
+        end
+        how = how .. (' In %s (not for Pitchforks won in %s): %s; decoration at %s.'):format(town,
+            core.NATIONS[core.TOWN_NATION[zone]], who, fork[4]);
+    end
+    list[#list + 1] = { id = 18103, name = 'Pitchfork +1', how = how };
+    return list;
+end
 
 -- Who sells 12-gil Ginger Cookies in a festival town: Valeriano only in the town of the nation
 -- first in conquest (the addon checks he is there), Ness Rugetomal always.

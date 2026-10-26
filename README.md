@@ -14,7 +14,10 @@ The rules follow [Phoenix's wiki page](https://wiki.phoenix-xi.com/Harvest_Festi
 The window also shows:
 
 - which of your sweets still give a costume today, and which costume the nearest townsperson gives
-- the Pitchfork, Pitchfork +1, Witch Hat and Coven Hat, with how to get each. For the Pitchfork it names the townsfolk who give your town's costume pair.
+- the Pitchfork, Pitchfork +1, Witch Hat and Coven Hat, with how to get each, told for the town you're in:
+  - **Pitchfork:** the townsfolk who give that town's costume pair, and where its decoration is
+  - **Pitchfork +1:** the townsfolk who give a goblin costume to citizens of your nation, and that town's decoration
+  - **Witch Hat and Coven Hat:** the nearest exorcist and her witches (Northern San d'Oria, Bastok Markets or Windurst Waters)
 
 Commands (`/hmax` works too):
 

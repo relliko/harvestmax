@@ -16,7 +16,7 @@
 
 addon.name    = 'harvestmax';
 addon.author  = 'Relli';
-addon.version = '0.2';
+addon.version = '0.3';
 addon.desc    = 'Harvest Festival: what to wear and trade for every prize in the fewest sweets.';
 addon.link    = 'https://github.com/relliko/harvestmax';
 
@@ -83,7 +83,7 @@ end
 
 local TRACKED = { };
 for _, id in ipairs(core.ALL) do TRACKED[id] = true; end
-for _, x in ipairs(core.EXTRAS) do TRACKED[x.id] = true; end
+for _, x in ipairs(core.extras(0)) do TRACKED[x.id] = true; end
 
 -- The sweets traded this Vana'diel day, emptied at Vana'diel midnight.
 local function used_today()
@@ -123,6 +123,8 @@ local function read()
         end
     end
     s.head, s.main = worn(inv, SLOT.head), worn(inv, SLOT.main);
+    local okn, nation = pcall(function () return mm:GetPlayer():GetNation(); end);
+    s.nation = okn and nation or nil;
 
     local town = core.NPCS[s.zone] or { };
     local shop = core.COOKIE_SHOPS[s.zone];
@@ -226,31 +228,15 @@ local function refresh()
     end
 end
 
--- Who in this town gives a costume: "Kueh Igunahmori, Phamelise".
-local function givers(zone, costume)
-    local names = { };
-    for name, c in pairs(core.NPCS[zone] or { }) do
-        if (c == costume) then names[#names + 1] = name; end
-    end
-    table.sort(names);
-    return table.concat(names, ', ');
-end
-
 local function draw_extras(s)
     if (not imgui.CollapsingHeader('Other festival rewards')) then
         return;
     end
-    local pair = core.PITCHFORK[s.zone];
-    for _, x in ipairs(core.EXTRAS) do
+    for _, x in ipairs(core.extras(s.zone, s.nation)) do
         local have = s.owned[x.id];
         line(have and GOOD or NEXT, ('%s %s'):format(have and '+' or '-', x.name));
         if (not have) then
-            local how = x.how;
-            if (x.id == 18102 and pair ~= nil) then
-                how = how .. (' Here: %s (%s) and %s (%s), decoration at %s.'):format(
-                    pair[1], givers(s.zone, pair[1]), pair[2], givers(s.zone, pair[2]), pair[3]);
-            end
-            wrapped(NONE, how);
+            wrapped(NONE, x.how);
         end
     end
 end

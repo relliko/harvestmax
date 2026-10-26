@@ -197,6 +197,8 @@ print = function (x) printed[#printed + 1] = x end
 bags = { [0] = { [1] = { Id = 4467, Count = 12 }, [2] = { Id = 13916, Count = 1 } } }
 sizes = { [0] = 31 }
 worn_head = 2 -- slot index of the head piece in the inventory
+zone, nation = 230, 0
+npc_name = 'Pourette'
 AshitaCore = {
     GetMemoryManager = function () return {
         GetInventory = function () return {
@@ -205,13 +207,14 @@ AshitaCore = {
             GetEquippedItem = function (_, slot) return { Index = slot == 4 and worn_head or 0 } end,
         } end,
         GetParty = function () return {
-            GetMemberZone = function () return 230 end,
+            GetMemberZone = function () return zone end,
             GetMemberTargetIndex = function () return 1000 end,
         } end,
+        GetPlayer = function () return { GetNation = function () return nation end } end,
         GetEntity = function () return {
             GetStatus = function () return 0 end,
             GetRenderFlags0 = function (_, i) return (i == 20 or i == 21) and 0x200 or 0 end,
-            GetName = function (_, i) return i == 20 and 'Pourette' or i == 21 and 'Valeriano' or '' end,
+            GetName = function (_, i) return i == 20 and npc_name or i == 21 and 'Valeriano' or '' end,
             GetDistance = function (_, i) return i == 20 and 16 or 400 end,
         } end,
     } end,
@@ -303,6 +306,32 @@ class Addon(unittest.TestCase):
     def test_pitchfork_names_this_towns_npcs(self):
         drawn = self.frame()
         self.has(drawn, 'Ghost (Kueh Igunahmori, Phamelise) and Skeleton (Corua, Ostalie), decoration at L-7')
+
+    def test_every_festival_town(self):
+        # One townsperson per town, as the client names them; each must be found and traded to.
+        towns = {230: 'Pourette', 231: 'Trick Bones', 234: 'Proud Beard', 235: 'Charging Chocobo',
+                 238: 'Maqu Molpih', 241: 'Taraihi-Perunhi'}
+        self.lua.execute("worn_head = 0")
+        for zone, name in towns.items():
+            self.lua.execute(f"zone = {zone}; npc_name = [[{name}]]")
+            drawn = self.frame()
+            self.has(drawn, f'Trade ONE Garlic Cracker to {name} (4 yalms)')
+            self.has(drawn, f'{name} gives the')
+            self.has(drawn, 'Pitchfork +1')
+
+    def test_rewards_told_for_bastok(self):
+        self.lua.execute("worn_head = 0; zone = 235; npc_name = 'Olwyn'; nation = 1")
+        drawn = self.frame()
+        self.has(drawn, 'talk to Brian (G-9) out of costume')
+        self.has(drawn, 'In Bastok Markets: Ghost (Olwyn, Trick Bones, Trick Specter) and Hound (Carmelide, Trick Ghost, Visala), decoration at J-10')
+        self.has(drawn, 'not for Pitchforks won in Bastok): Bastok citizens: Ciqala, Trick Phantom; decoration at G-4')
+
+    def test_rewards_told_for_windurst_woods(self):
+        # No exorcist in Windurst Woods: Windurst Waters' Roger. Unknown nation: every nation's list.
+        self.lua.execute("worn_head = 0; zone = 241; npc_name = 'Quesse'; nation = nil")
+        drawn = self.frame()
+        self.has(drawn, 'talk to Roger (F-5, north map) in Windurst Waters')
+        self.has(drawn, "San d'Oria: Millerovieunet; Bastok: Meriri, Wije Tiren; Windurst: Nya Labiccio; decoration at I-6")
 
     def test_commands(self):
         e = self.lua.table_from({'command': '/harvestmax auto off', 'blocked': False})
